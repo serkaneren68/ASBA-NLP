@@ -97,12 +97,27 @@ def wait_review_cards(driver, wait):
         )
     )
 
+def wait_star_rating_cards(driver, wait):
+    return wait.until(
+        EC.presence_of_all_elements_located(
+            # Kart class'ı build'e göre değişebilir: prefix ile seç
+            (By.XPATH, "//div[starts-with(@class,'hermes-RatingPointer-module-UefD0t2XvgGWsKdLkNoX')]")
+        )
+    ) 
+
+
 def scrape_comments_in_current_page(driver, wait):
     comments = []
     cards = wait_review_cards(driver, wait)
 
+    ratings = wait_star_rating_cards(driver, wait)
     driver.execute_script("arguments[0].scrollIntoView({block:'end'});", cards[-1])
+    
     time.sleep(0.2)
+    for rating in ratings:
+        how_many_stars = len(rating.find_elements(By.XPATH, ".//div[starts-with(@class,'star')]"))
+        
+        print(how_many_stars)  
 
     for card in cards:
         try:
@@ -377,8 +392,7 @@ summary = scrape_category_via_query(
     base_category_url=category_url,
     start_page=1,
     max_pages=3,                # istersen None bırak, ürün bitene kadar gider
-    limit_products_per_page=5,  # her sayfadan ilk 5 ürün
-    limit_reviwe_per_product=100,
+    limit_products_per_page=20,  # her sayfadan ilk 5 ürün
     sleep_between=0.3
 )
 
