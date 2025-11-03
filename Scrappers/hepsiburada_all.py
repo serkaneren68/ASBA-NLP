@@ -31,14 +31,21 @@ def init_db(db_path="reviews.db"):
         product_id INTEGER NOT NULL,
         review_hash TEXT NOT NULL,
         review_text TEXT NOT NULL,
+        rating INTEGER,                -- ★ yeni
         page_no INTEGER,
         collected_ts INTEGER,
         FOREIGN KEY(product_id) REFERENCES products(id),
         UNIQUE(product_id, review_hash)
     );
     """)
+    # Eski tabloda rating yoksa ekle (failsafe)
+    try:
+        conn.execute("ALTER TABLE reviews ADD COLUMN rating INTEGER;")
+    except sqlite3.OperationalError:
+        pass
     conn.execute("CREATE INDEX IF NOT EXISTS idx_reviews_product ON reviews(product_id);")
     return conn
+
 
 def get_or_create_product_id(conn, product_url, title=None):
     cur = conn.cursor()
@@ -56,21 +63,32 @@ def get_or_create_product_id(conn, product_url, title=None):
 def hash_review(text:str) -> str:
     return hashlib.sha256((text or "").strip().encode("utf-8")).hexdigest()
 
-def save_reviews(conn, product_id:int, reviews:list, page_no:int):
-    """reviews: [str, str, ...]"""
-    rows = [(product_id, hash_review(t), t, page_no, int(time.time())) for t in reviews if t and t.strip()]
-    with conn:  # otomatik commit/rollback
-        conn.executemany(
-            "INSERT OR IGNORE INTO reviews(product_id, review_hash, review_text, page_no, collected_ts) "
-            "VALUES(?,?,?,?,?)",
-            rows
-        )
+def save_reviews(conn, product_id:int, items:list, page_no:int):
+    """
+    items: [{'text': str, 'rating': int|None}, ...]
+    """
+    rows = []
+    now = int(time.time())
+    for it in items:
+        t = (it.get('text') or '').strip()
+        if not t:
+            continue
+        r = it.get('rating')
+        rows.append((product_id, hash_review(t), t, r, page_no, now))
+    if rows:
+        with conn:
+            conn.executemany(
+                "INSERT OR IGNORE INTO reviews(product_id, review_hash, review_text, rating, page_no, collected_ts) "
+                "VALUES(?,?,?,?,?,?)",
+                rows
+            )
 
 from urllib.parse import urlsplit, urlunsplit, parse_qs, urlencode
 
 def build_category_page_url(base_url: str, page_no: int) -> str:
     parts = urlsplit(base_url)
     q = parse_qs(parts.query)
+    q["siralama"]="coksatan"
     q["sayfa"] = [str(page_no)]
     new_query = urlencode(q, doseq=True)
     return urlunsplit((parts.scheme, parts.netloc, parts.path, new_query, parts.fragment))
@@ -93,7 +111,7 @@ def wait_review_cards(driver, wait):
     return wait.until(
         EC.presence_of_all_elements_located(
             # Kart class'ı build'e göre değişebilir: prefix ile seç
-            (By.XPATH, "//div[starts-with(@class,'hermes-ReviewCard-module-KaU17BbDowCWcTZ9zzxw')]")
+            (By.XPATH, "//div[starts-with(@class,'hermes-ReviewCard-module-dY_oaYMIo0DJcUiSeaVW')]")
         )
     )
 
@@ -105,39 +123,104 @@ def wait_star_rating_cards(driver, wait):
         )
     ) 
 
+def extract_rating_from_card(card):
+    try:
+        stars = card.find_elements(
+            By.XPATH,
+            ".//div[starts-with(@class,'hermes-RatingPointer-module-')]"
+            "//div[starts-with(@class,'star')]"
+        )
+        if not stars:
+            return None
 
-def scrape_comments_in_current_page(driver, wait):
-    comments = []
-    cards = wait_review_cards(driver, wait)
+        filled = 0
+        for s in stars:
+            txt = (s.text or "").strip()
+            cls = (s.get_attribute("class") or "").lower()
+            style = (s.get_attribute("style") or "").lower()
 
-    ratings = wait_star_rating_cards(driver, wait)
-    driver.execute_script("arguments[0].scrollIntoView({block:'end'});", cards[-1])
-    
-    time.sleep(0.2)
-    for rating in ratings:
-        how_many_stars = len(rating.find_elements(By.XPATH, ".//div[starts-with(@class,'star')]"))
-        
-        print(how_many_stars)  
+            # 2) Sık görülen class ipuçları, "star is working now"
+            if any(k in cls for k in ("full", "filled", "active", "selected", "star")):
+                filled += 1
+                continue
 
-    for card in cards:
+        # Güvenli sınırla
+        filled = max(0, min(filled, 5))
+        return filled if filled > 0 else None
+    except Exception:
+        return None
+
+
+def extract_text_from_card(driver, card):
+    # Önce <span> normalize edilmiş, yoksa p/div/span fallback
+    for xp in [
+        # ".//span[normalize-space()]",
+        # ".//*[self::p or self::div or self::span][normalize-space()]",
+        ".//div[starts-with(@class,'hermes-ReviewCard-module-KaU17BbDowCWcTZ9zzxw')]"
+    ]:
         try:
-            span = card.find_element(By.XPATH, ".//span[normalize-space()]")
-            text = driver.execute_script("return arguments[0].textContent;", span)
+            node = card.find_element(By.XPATH, xp)
+            node_comment = node.find_element(By.XPATH, ".//span[normalize-space()]")
+            text = driver.execute_script("return arguments[0].textContent;", node_comment)
             text = (text or "").strip()
             if text:
-                comments.append(text)
-                continue
+                return text
         except Exception:
             pass
-        try:
-            node = card.find_element(By.XPATH, ".//*[self::p or self::div or self::span][normalize-space()]")
-            text = driver.execute_script("return arguments[0].textContent;", node)
-            text = (text or "").strip()
-            if text:
-                comments.append(text)
-        except Exception:
-            continue
-    return comments
+    return None
+
+def separate_by_review_stars(base_html_link):
+    return [base_html_link + "?sayfa=1&filtre=" + str(index) for index in range(1,6)]
+
+def scrape_comments_in_current_page(driver, wait):
+    items = []
+    cards = wait_review_cards(driver, wait)
+
+    # son karta kaydır, lazy render varsa tetiklensin
+    driver.execute_script("arguments[0].scrollIntoView({block:'end'});", cards[-1])
+    time.sleep(0.2)
+
+    for card in cards:
+        text = extract_text_from_card(driver, card)
+        rating = extract_rating_from_card(card)
+        if text:
+            items.append({"text": text, "rating": rating})
+    return items
+
+
+
+# def scrape_comments_in_current_page(driver, wait):
+#     comments = []
+#     cards = wait_review_cards(driver, wait)
+
+#     ratings = wait_star_rating_cards(driver, wait)
+#     driver.execute_script("arguments[0].scrollIntoView({block:'end'});", cards[-1])
+    
+#     time.sleep(0.2)
+#     for rating in ratings:
+#         how_many_stars = len(rating.find_elements(By.XPATH, ".//div[starts-with(@class,'star')]"))
+        
+#         print(how_many_stars)  
+
+#     for card in cards:
+#         try:
+#             span = card.find_element(By.XPATH, ".//span[normalize-space()]")
+#             text = driver.execute_script("return arguments[0].textContent;", span)
+#             text = (text or "").strip()
+#             if text:
+#                 comments.append(text)
+#                 continue
+#         except Exception:
+#             pass
+#         try:
+#             node = card.find_element(By.XPATH, ".//*[self::p or self::div or self::span][normalize-space()]")
+#             text = driver.execute_script("return arguments[0].textContent;", node)
+#             text = (text or "").strip()
+#             if text:
+#                 comments.append(text)
+#         except Exception:
+#             continue
+#     return comments
 
 def get_total_review_pages(driver):
     try:
@@ -186,7 +269,7 @@ def click_review_page(driver, wait, page_no):
     except TimeoutException:
         return False
 
-def scrape_all_reviews_of_product(driver, wait, product_url, product_reviews_url, conn):
+def scrape_all_reviews_of_product(driver, wait, product_url, limit_review_per_product_star, product_reviews_url, conn):
     # Ürünü (varsa başlıkla) kaydet/al
     product_id = get_or_create_product_id(conn, product_url, title=None)
 
@@ -203,11 +286,12 @@ def scrape_all_reviews_of_product(driver, wait, product_url, product_reviews_url
                 break
             time.sleep(0.3)
 
-        page_comments = scrape_comments_in_current_page(driver, wait)
-        if page_comments:
-            save_reviews(conn, product_id, page_comments, page_no=p)
-            all_count += len(page_comments)
-
+        page_items = scrape_comments_in_current_page(driver, wait)
+        if page_items:
+            save_reviews(conn, product_id, page_items, page_no=p)
+            all_count += len(page_items)
+        if all_count > limit_review_per_product_star:
+            break
     return all_count
 
 # --- Kategori tarafı ---
@@ -270,7 +354,7 @@ def get_product_urls_from_category_page(driver, wait, limit_per_page=None):
 
 def scrape_category_via_query(driver, base_category_url: str,
                               start_page=1, max_pages=None,
-                              limit_products_per_page=None, sleep_between=0.4):
+                              limit_products_per_page=None,limit_review_per_product_star=None,  sleep_between=0.4):
     """
     URL'deki ?sayfa=N parametresiyle kategori sayfalarını gezer.
     max_pages=None ise ürün kalmayana kadar devam eder.
@@ -306,19 +390,21 @@ def scrape_category_via_query(driver, base_category_url: str,
             visited_products.add(pu)
 
             reviews_url = build_reviews_url_from_product_url(pu)
-            try:
-                n = scrape_all_reviews_of_product(driver, wait,
-                                                  product_url=pu,
-                                                  product_reviews_url=reviews_url,
-                                                  conn=conn)   # ← SQLite bağlantın
-                results[pu] = n
-                print(f"[OK] {pu} → {n} yorum kaydedildi")
-            except Exception as e:
-                print(f"[HATA] {pu}: {e}")
-            time.sleep(sleep_between)
-
+            reviews_urls_by_star = separate_by_review_stars(reviews_url)
+            
+            for star_class in reviews_urls_by_star:
+                try:
+                    n = scrape_all_reviews_of_product(driver, wait,
+                                                    product_url=pu,
+                                                    limit_review_per_product_star = limit_review_per_product_star,
+                                                    product_reviews_url=star_class,
+                                                    conn=conn)   # ← SQLite bağlantın
+                    results[pu] = n
+                    print(f"[OK] {pu} → {n} yorum kaydedildi")
+                except Exception as e:
+                    print(f"[HATA] {pu}: {e}")
+                time.sleep(sleep_between)
         page += 1
-
     return results
 
 # def scrape_category(driver, start_category_url, max_category_pages=1, limit_products_per_page=None, sleep_between=0.4):
@@ -380,21 +466,35 @@ def scrape_category_via_query(driver, base_category_url: str,
 #     return results
 
 
-driver = webdriver.Chrome()
-conn = init_db("reviews.db")  # önceki SQLite fonksiyonların
+driver = webdriver.Edge()
+conn = init_db("reviews_V2.db")  # önceki SQLite fonksiyonların
 
 #category_url = "https://www.hepsiburada.com/bilgisayar-sistemleri-ve-ekipmanlari-c-2147483646"
 
-category_url = "https://www.hepsiburada.com/yapi-market-hirdavatlar-c-2147483620"
+category_urls= [#"https://www.hepsiburada.com/yapi-market-hirdavatlar-c-2147483620",
+                #"https://www.hepsiburada.com/giyim-ayakkabi-c-2147483636", #Moda
+                #"https://www.hepsiburada.com/spor-fitness-urunleri-c-2147483635", #Spor Ürünleri
+                #"https://www.hepsiburada.com/kozmetik-c-2147483603",#Kozmetik
+                #"https://www.hepsiburada.com/supermarket-c-2147483619", #SüperMarket
+                #"https://www.hepsiburada.com/kitaplar-c-2147483645", #Kitap
+                # "https://www.hepsiburada.com/mutfak-gerecleri-c-22500" #Mutfak
+                # "https://www.hepsiburada.com/elektrikli-ev-aletleri-c-17071", #Elektrikli ev aletleri
+                # "https://www.hepsiburada.com/mobilyalar-c-18021299", #Mobilya
+                # "https://www.hepsiburada.com/oto-aksesuarlari-c-2147483631", #Oto aksesuarları
+                "https://www.hepsiburada.com/anne-bebek-oyuncak-c-2147483639" #Anne Bebek
+                ]
 
-summary = scrape_category_via_query(
-    driver,
-    base_category_url=category_url,
-    start_page=1,
-    max_pages=3,                # istersen None bırak, ürün bitene kadar gider
-    limit_products_per_page=20,  # her sayfadan ilk 5 ürün
-    sleep_between=0.3
-)
+for category_url in category_urls:
+    
+    summary = scrape_category_via_query(
+        driver,
+        base_category_url=category_url,
+        start_page=1,
+        max_pages=3,                # istersen None bırak, ürün bitene kadar gider
+        limit_products_per_page=20,  # her sayfadan ilk 5 ürün
+        limit_review_per_product_star = 100,
+        sleep_between=0.3
+    )
 
 conn.close()
 driver.quit()
