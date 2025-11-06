@@ -9,9 +9,9 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 if not os.environ.get("GOOGLE_API_KEY"):
-  os.environ["GOOGLE_API_KEY"] = "AIzaSyCMImjFMxNmcgPdIuAK9UkAkDPSDN_8YMo"
+  os.environ["GOOGLE_API_KEY"] = "AIzaSyCKHLWW-oo6gZC1anUwiCntfKg6XOrIW2k"
 
-DB_PATH = "C:\\Projects\\NLP\\ASBA\\Scrapper\\Scrappers\\reviews.db"                        # <-- kendi .sqlite yolun
+DB_PATH = "C:\\Projects\\NLP\\ASBA\\Scrapper\\reviews_V2.db"                        # <-- kendi .sqlite yolun
 MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 BATCH_SIZE = 64
 SLEEP_BETWEEN_CALLS = 0.15
