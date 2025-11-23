@@ -1,0 +1,379 @@
+\documentclass{ieeeaccess}
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{hyperref}
+
+
+\usepackage{bm}
+\makeatletter
+\AtBeginDocument{\DeclareMathVersion{bold}
+\SetSymbolFont{operators}{bold}{T1}{times}{b}{n}
+\SetSymbolFont{NewLetters}{bold}{T1}{times}{b}{it}
+\SetMathAlphabet{\mathrm}{bold}{T1}{times}{b}{n}
+\SetMathAlphabet{\mathit}{bold}{T1}{times}{b}{it}
+\SetMathAlphabet{\mathbf}{bold}{T1}{times}{b}{n}
+\SetMathAlphabet{\mathtt}{bold}{OT1}{pcr}{b}{n}
+\SetSymbolFont{symbols}{bold}{OMS}{cmsy}{b}{n}
+\renewcommand\boldmath{\@nomath\boldmath\mathversion{bold}}}
+\makeatother
+
+\def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
+    T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
+
+%Your document starts from here ___________________________________________________
+\begin{document}
+\history{Date of version 23/11/2025}
+\doi{}
+
+\title{Aspect-Based Sentiment Analysis for Turkish E-Commerce Reviews Using BERTurk }
+\author{Ahmet Furkan Faideci\authorrefmark{1},
+Hozan Baydu\authorrefmark{2}, and Serkan Eren,
+\authorrefmark{3},
+}
+
+\address[1 2 3]{Artificial Intelligence Graduate Program, Department of Computer Engineering, Faculty of Engineering, Gebze Technical University, Kocaeli, Türkiye }
+
+\tfootnote{This work was conducted as part of the CSE 684: Natural Language Processing course in the Master’s Degree Program at Gebze Technical University.}
+
+\markboth
+{Author \headeretal: Preparation of Papers for IEEE TRANSACTIONS and JOURNALS}
+{Author \headeretal: Preparation of Papers for IEEE TRANSACTIONS and JOURNALS}
+
+\corresp{a.faideci2025@gtu.edu.tr, h.baydu2024@gtu.edu.tr, s.eren2018@gtu.edu.tr}
+
+
+\begin{abstract}
+This project presents a Turkish Aspect-Based Sentiment Analysis (ABSA) framework developed on a large-scale e-commerce review dataset collected from the Hepsiburada platform. Although ABSA has been well explored in English, existing Turkish sentiment models remain limited in their ability to handle multi-aspect feedback. A total of 54,416 customer reviews were gathered from 507 products across 10 major categories. From this large-scale corpus, an unsupervised aspect discovery method using Sentence-BERT and K-Means clustering was employed to identify seven latent aspect categories, including \textit{Price/Performance}, \textit{Delivery}, and \textit{Quality}. Subsequently, a Gold Standard subset of 2,000 reviews was expertly annotated to train the proposed system. The model architecture is based on fine-tuning \textit{BERTurk} using a Multi-Task Learning (MTL) framework. Unlike traditional multi-label approaches, the model utilizes a shared encoder with seven independent classification heads to simultaneously predict the specific sentiment polarity (Positive, Negative, or Neutral/Absent) for each aspect. The system produces structured outputs such as {Price'': Positive'', Quality'': Negative''} for a single review. The overall goal is to contribute a robust, reproducible ABSA pipeline and high-quality benchmark resources for Turkish e-commerce analytics. 
+
+\end{abstract}
+
+\begin{keywords}
+Aspect-Based Sentiment Analysis, Turkish NLP, BERTurk, Multi-Label Classification, E-Commerce Reviews , Hepsiburada
+\end{keywords}
+
+\titlepgskip=-21pt
+
+\maketitle
+
+\section{Introduction}
+\label{sec:introduction}
+\PARstart{T}{he} increasing use of e-commerce platforms has led to an exponential growth in user generated product reviews, which serve as a critical source of information for mining customer preferences and operationalizing feedback \cite{hu2004mining}. These reviews contain granular opinions on diverse product attributes, such as quality, logistics, pricing, and usability, making them indispensable for Natural Language Processing (NLP) tasks, including sentiment analysis and opinion mining. In Türkiye, Hepsiburada exemplifies this scale as a leading marketplace; as of late 2024, the platform reported a Net Promoter Score (NPS) of 74 and served over 12 million active customers, driven by initiatives such as its Premium membership program which reached 3.7 million users \cite{hepsi2024financial}.
+
+While traditional sentiment analysis typically assigns a single scalar polarity (positive, negative, or neutral) to an entire document, such document level approaches fail to capture the complexity of customer feedback where conflicting opinions coexist (e.g., "fast shipping" but "poor quality"). Aspect-Based Sentiment Analysis (ABSA) addresses this limitation by identifying specific aspect terms and determining their associated sentiment polarities. ABSA has been rigorously standardized in English, largely driven by benchmark datasets from SemEval shared tasks \cite{semabsa}. Recent surveys \cite{zhang2023survey, hua2024systematic} classify these objectives into "Single ABSA" tasks (e.g., aspect extraction) and "Compound ABSA" tasks (e.g., joint aspect-sentiment extraction), highlighting the necessity of the latter for actionable business intelligence.
+
+In contrast, ABSA research for the Turkish language remains under resourced. Existing studies have predominantly focused on document level sentiment classification using classical machine learning or lexicon based methods \cite{demircan2021}. While the landscape has improved with the release of large-scale benchmarks like TrSAV1 \cite{aydogan2023trsav1}, which provides 150,000 labeled reviews, comprehensive resources for fine-grained token level aspect annotation remain scarce. Furthermore, the agglutinative morphology of Turkish poses unique challenges for aspect extraction, creating a clear need for deep learning methodologies capable of capturing long distance syntactic dependencies.
+
+To address this gap, this study proposes a transformer-based ABSA framework tailored for Turkish e-commerce text. The methodology leverages a dataset of 54,416 reviews collected from Hepsiburada across 10 major product categories, ensuring broad domain coverage from electronics to cosmetics. A detailed account of the dataset construction and annotation process is presented in Section~\ref{sec:dataset_construction}.
+
+Given the proven efficacy of pre-trained language models, the proposed approach employs BERTurk \cite{berturk} as the backbone encoder. Recent empirical studies \cite{bilgin2025} demonstrate that transformer-based pipelines significantly outperform traditional architectures in identifying aspect categories within Turkish multi-domain reviews. Building on this foundation, this research aims to design a robust methodology for extracting aspect-sentiment pairs, contributing both a structured dataset and a reproducible ABSA pipeline to the Turkish NLP community.
+
+The remaining sections of this paper describe related work (Section~\ref{sec:related_work}), the dataset characteristics (Section~\ref{sec:dataset_construction}), the proposed methodology (Section~\ref{sec:methodology}), and the preliminary findings (Section~\ref{sec:conclusion}).
+
+\section{Related Work}
+\label{sec:related_work}
+
+Sentiment analysis, also known as opinion mining, has established itself as a fundamental task in Natural Language Processing (NLP), enabling the automated extraction of subjective information from user-generated content \cite{hu2004mining}. While traditional approaches successfully categorize text at the document or sentence level, they often lack the granularity required to disentangle conflicting opinions regarding different attributes of a single entity (e.g., a product with a "great screen" but "poor battery").
+
+\subsection{Evolution of Aspect-Based Sentiment Analysis}
+To address the limitations of coarse-grained analysis, Aspect-Based Sentiment Analysis (ABSA) focuses on identifying specific aspect terms and resolving their associated sentiment polarities. Early research relied heavily on feature engineering and static sentiment lexicons, but the field has since shifted toward deep learning architectures. As detailed in recent comprehensive surveys by Zhang et al. \cite{zhang2023survey} and Hua et al. \cite{hua2024systematic}, modern ABSA is categorized into "Single ABSA" tasks (e.g., Aspect Term Extraction) and "Compound ABSA" tasks (e.g., Aspect-Sentiment Triplet Extraction). The latter, which solves extraction and classification jointly, is currently considered the state-of-the-art for minimizing error propagation.
+
+\subsection{Turkish Sentiment Analysis Landscape}
+Unlike English, which benefits from massive annotated corpora and established benchmarks like the SemEval Shared Tasks \cite{semabsa}, research on Turkish sentiment analysis faces significant resource constraints. Early studies on Turkish predominantly utilized morphological analysis combined with classical machine learning algorithms such as Naïve Bayes and Support Vector Machines (SVM) to predict document-level polarity \cite{demircan2021}. 
+
+A major bottleneck has been the scarcity of large-scale, publicly available datasets. While the SemEval-2016 Task 5 provided a gold-standard dataset for Turkish ABSA, it is limited to the restaurant domain and contains fewer than 2,000 sentences, restricting its utility for training deep neural networks from scratch. More recently, Aydoğan and Kocaman introduced TrSAV1 \cite{aydogan2023trsav1}, a massive benchmark comprising 150,000 e-commerce reviews. However, TrSAV1 is annotated only for document-level sentiment (Positive/Neutral/Negative), leaving a gap for large-scale, token-level aspect annotations required for fine-grained ABSA.
+
+\subsection{Transformer-Based Approaches in Turkish}
+The advent of Transformer architectures has revolutionized Turkish NLP. The release of BERTurk \cite{berturk}, a BERT model pre-trained specifically on a large Turkish corpus, addressed many challenges posed by the language's agglutinative morphology. Recent studies have begun to leverage these models for ABSA. For instance, Bilgin and Turan \cite{bilgin2025} demonstrated that fine-tuning BERTurk on sequential classification tasks significantly outperforms traditional lexicon-based methods in extracting aspect categories. Similarly, other recent works have explored pipeline approaches that first extract targets and then classify sentiments \cite{ozkan2022}.
+
+Despite these advancements, most existing Turkish ABSA frameworks either rely on small, single-domain datasets (like restaurants) or treat aspect extraction and sentiment classification as isolated pipeline steps. There remains a distinct lack of a unified, multi-domain framework trained on a large-scale corpus that can handle the compound task of extracting aspect-sentiment pairs simultaneously. This study aims to bridge this gap by introducing a broad-coverage dataset and a transformer based methodology tailored for the Turkish e-commerce context.
+
+
+\section{Dataset Construction}
+\label{sec:dataset_construction}
+
+This study establishes a large-scale, multi-domain corpus of Turkish e-commerce product reviews sourced from Hepsiburada, one of the dominant online marketplaces in Türkiye. As of late 2024, Hepsiburada hosts over 200 million Stock Keeping Units (SKUs) and serves approximately 12 million active customers \cite{hepsi2024financial}, making it a representative source for analyzing Turkish consumer sentiment.
+
+The primary objective of the dataset construction was to mitigate the domain-dependency and polarity imbalance often observed in raw web-scraped corpora. The final curated dataset consists of 54,416 user-generated reviews collected from 507 products across 10 major categories, specifically structured to support Aspect-Based Sentiment Analysis (ABSA) and cross-domain generalization.
+
+\subsection{Category Selection} To ensure broad semantic coverage, the data collection process targeted eleven high-volume product categories. Reviews were successfully harvested from the following ten categories, selected to represent varying levels of subjectivity and aspect complexity (e.g., "technical specs" in Electronics vs. "aesthetic preferences" in Fashion):
+
+\begin{itemize} \item Home Improvement \item Fashion (Clothing \& Footwear) \item Sports \& Fitness Equipment \item Cosmetics \item Supermarket \item Books \item Kitchenware \item Small Home Appliances \item Auto Accessories \item Mother, Baby \& Toys \end{itemize}
+
+\textit{Note on Exclusions:} The \textbf{Furniture} category was excluded from the final dataset. During the extraction phase, significant inconsistencies were observed in the Document Object Model (DOM) structure of furniture product pages—likely due to dynamic content loading for variable product attributes (dimensions, fabrics)—which compromised the reliability of the automated scraper.
+
+\subsection{Product Sampling and Polarity Balancing} To minimize selection bias, a stratified sampling approach was employed based on the platform's "Best Sellers" ranking algorithm. For each category, the top 60 products were targeted by scanning the first three results pages. Out of the initial pool of 516 targeted products, 507 were successfully processed.
+
+A critical challenge in e-commerce sentiment analysis is the "J-shaped" distribution of user ratings, where reviews are overwhelmingly skewed toward positive (5-star) values \cite{hu2009overcoming}. To address this, we implemented a quota-based sampling strategy: \begin{itemize} \item We filtered reviews by star rating (1 to 5). \item A cap of 100 reviews per rating level per product was applied. \item This ensured a balanced distribution (uniform polarity), allowing the model to learn from negative and neutral feedback effectively, which is often underrepresented in random sampling. \end{itemize}
+
+\subsection{Data Preprocessing} Following extraction, the raw text data underwent a standardized preprocessing pipeline to ensure quality and consistency (see Algorithm \ref{alg:data_pipeline}). \textbf{Crucially, unlike traditional pipelines that lowercase all text, we adopted a case-preserving strategy} to ensure compatibility with the \textit{cased} BERT model used in the methodology, which relies on capitalization for entity recognition (e.g., distinguishing special brand names).
+
+The cleaning steps involved: \begin{enumerate} \item \textbf{Deduplication:} Duplicate entries were removed based on the review text to prevent data leakage between train/test splits. \item \textbf{Null Handling:} Rows with missing or empty review texts were dropped. \end{enumerate}
+
+\begin{algorithm}
+	\caption{Data Construction and Preprocessing Pipeline}
+	\label{alg:data_pipeline}
+	\begin{algorithmic}[1]
+		\Require  $U_{categories}$: List of Hepsiburada category URLs
+		\Require $Q_{star}$: Quota per star rating (e.g., 100)
+		\Ensure $D_{final}$: Balanced and preprocessed dataset
+		
+		\State $D_{raw} \leftarrow \emptyset$
+		\ForAll{$category \in U_{categories}$}
+		\State $P_{list} \leftarrow \text{ScrapeBestSellers}(category, \text{depth}=3 \text{ pages})$
+		\ForAll{$product \in P_{list}$}
+		\For{$star \leftarrow 1 \text{ to } 5$}
+		\State $R_{batch} \leftarrow \text{GetReviews}(product, star)$
+		\State \Comment{Apply quota to balance sentiment distribution}
+		\If{$\text{Count}(R_{batch}) > Q_{star}$}
+		\State $R_{batch} \leftarrow \text{RandomSample}(R_{batch}, Q_{star})$
+		\EndIf
+		\State $D_{raw} \leftarrow D_{raw} \cup R_{batch}$
+		\EndFor
+		\EndFor
+		\EndFor
+
+		\State \textbf{Preprocessing Phase:}
+		\ForAll{$review \in D_{raw}$}
+		\State $t \leftarrow review.text$
+		\State $t \leftarrow \text{RemoveDuplicates}(t)$
+		\State \Comment{Preserve Turkish characters and Case for BERTurk}
+		\If{$\text{Length}(t) < 2 \text{ sentence}$}
+		\State \textbf{Discard} $review$
+		\Else
+		\State $D_{final}.\text{add}(t)$
+		\EndIf
+		\EndFor
+		\Return $D_{final}$
+	\end{algorithmic}
+\end{algorithm}
+
+\subsection{Final Dataset Characteristics} The post-processed corpus contains \textbf{54,416} reviews. Unlike single-domain datasets (e.g., movie reviews), this corpus spans diverse semantic fields—from the durability of "Auto Accessories" to the texture of "Cosmetics". From this large-scale pool, a subset of 5,000 reviews was used for unsupervised aspect discovery, and a Gold Standard subset of 2,000 reviews was manually annotated for the supervised training phase described in the next section.
+
+\begin{table}[h]
+	\centering
+	\caption{Summary of Final Dataset Statistics}
+	\label{tab:dataset_stats}
+	\begin{tabular}{ll}
+		\hline
+		\textbf{Metric} & \textbf{Count} \\ \hline
+		Total Reviews & 54,416 \\ 
+		Unique Products & 507 \\ 
+		Categories & 10 \\ 
+		Discovery Subset & 5,000 \\ 
+		Annotated Training Subset & 2,000 \\ \hline
+	\end{tabular}
+\end{table}
+
+\section{Methodology}
+\label{sec:methodology}
+
+The proposed methodology adopts a hybrid approach that combines unsupervised clustering for aspect discovery with a supervised Multi-Task Learning (MTL) framework for sentiment prediction. The system is built upon \textit{BERTurk} (dbmdz/bert-base-turkish-cased), a state-of-the-art language model optimized for Turkish, fine-tuned to simultaneously predict sentiment polarities for seven distinct product aspects.
+
+\subsection{Unsupervised Aspect Extraction and Clustering}
+Data Preprocessing and Granularity for this intermediate phase of the study, a subset of 5,000 raw customer reviews was utilized to establish the aspect extraction pipeline. A critical initial step in the methodology was sentence segmentation. Since a single consumer review often contains multiple distinct opinions (e.g., "The delivery was fast, but the screen quality is poor"), analyzing the review as a whole introduces noise into the clustering process. Therefore, we utilized the NLTK library to tokenize reviews into individual sentences, resulting in a more granular dataset where each data point represents a single semantic unit. Semantic Representation and Dimensional Reduction To capture the semantic meaning of the sentences beyond mere keyword matching, we employed the Sentence-BERT (SBERT) architecture. Specifically, the paraphrase-multilingual-MiniLM-L12-v2 model was selected for its robustness in handling the Turkish language. This model mapped each sentence into a high-dimensional vector space. Subsequently, Principal Component Analysis (PCA) was applied to reduce these embeddings to 50 dimensions. This dimensional reduction step was essential to mitigate the "curse of dimensionality" and enhance the performance of the subsequent K-Means clustering algorithm by filtering out noise while retaining variance. Unsupervised Clustering and Keyword Extraction The core of the aspect discovery process relied on the K-Means clustering algorithm, initialized with $k=10$ clusters to discover latent topics within the corpus. To interpret the semantic focus of each cluster, we utilized a class-based TF-IDF approach. A custom stopword list was rigorously curated to exclude general sentiment adjectives (e.g., "good," "bad," "beautiful") and generic verbs. This ensured that the highest-ranking keywords for each cluster represented specific aspects (e.g., "cargo," "price," "fabric," "battery") rather than the sentiment associated with them.Aspect Mapping and Distribution (Figure \ref{fig:aspectfigure})Following the clustering process, the 10 generated clusters were manually inspected and mapped to 7 distinct aspect categories to create a coherent taxonomy. For instance, clusters sharing semantic proximity, such as those related to "shipping" and "packaging," were merged into a single label. 
+
+
+\begin{figure}[htbp]
+	\centering
+	\includegraphics[width=0.48\textwidth, height=0.8\textheight,keepaspectratio]{aspect_dist.png}
+	\caption{Aspect Distribution.}
+	\label{fig:aspectfigure}
+\end{figure}
+
+
+As illustrated in Figure \ref{fig:aspectfigure}, the distribution of these aspects reveals that "Seller \& Return Process" (Satıcı ve İade Süreci) and "Delivery \& Packaging" (Teslimat ve Paketleme) are the most frequently discussed topics in this datasets. This unsupervised approach successfully allowed for the automated categorization of unlabeled text into specific domains such as "Price/Performance," "Design \& Material," and "Quality \& Durability" without the need for manual training data.
+
+
+\subsection{Supervised Learning and Multi-Head Model Architecture Implementation}
+
+Datasets Annotation and Sentiment Schema following the unsupervised clustering phase, a specific subset of 2,000 customer reviews was selected to establish a "Gold Standard" datasets for the intermediate training phase. To enable Aspect-Based Sentiment Analysis (ABSA), each review within this datasets was manually annotated according to the seven aspect categories previously identified (e.g., Price/Performance, Delivery, Quality). A granular sentiment polarity schema was applied for each aspect using a numerical scale: -1 (Negative), 0 (Neutral or Not Mentioned), and 1 (Positive). This multi-label annotation approach ensures that a single review can carry different sentiment polarities for different aspects simultaneously (e.g., positive for delivery but negative for product quality).
+
+Model Architecture: Multi-Head BERT To process this complex label structure, we designed a Multi-Head BERT architecture. We utilized the dbmdz/bert-base-turkish-cased (BERTurk) pre-trained model as the shared encoder to generate contextual word embedding suitable for the Turkish language. Unlike standard classification models that output a single prediction, our architecture features seven independent classification heads (linear layers) attached to the pooled output of the BERT encoder. This design allows the model to compute a separate loss and generate a distinct sentiment prediction for each aspect concurrently during a single forward pass, significantly increasing computational efficiency.
+
+
+\begin{figure}[htbp]
+	\centering
+	\includegraphics[width=0.48\textwidth, height=0.8\textheight,keepaspectratio]{modelperf.png}
+	\caption{Aspect Based Model Performance.}
+	\label{fig:modelperffigure}
+\end{figure}
+
+Performance Evaluation (Figure \ref{fig:modelperffigure}) The datasets was split into training (80\%), validation (10\%), and test (10\%) sets. The model achieved a General Macro-F1 score of 0.7546, which indicates robust performance for an intermediate dataset size of 2,000 samples. As illustrated in Figure 2, the model demonstrated superior performance in objective categories such as "Quality \& Durability" (F1: 0.8066) and "Delivery \& Packaging" (F1: 0.8053), where the terminology used by customers is often explicit and unambiguous. Conversely, the "Design \& Material" category yielded a lower score (F1: 0.6154). This disparity suggests that comments regarding design are inherently more subjective and context-dependent, making them harder for the model to generalize with a limited datasets. These results validate the efficacy of the Multi-Head BERT approach for Turkish ABSA tasks.
+
+\begin{algorithm}
+	\caption{Unsupervised Aspect Category Discovery}
+	\label{alg:aspect_discovery}
+	\begin{algorithmic}[1]
+		\Require $D_{raw}$: Raw review corpus
+		\Require $K$: Number of clusters (e.g., 10)
+		\Require $S_{T}$: paraphrase-multilingual-MiniLM-L12-v2
+		\Ensure $A_{categories}$: Identified aspect mapping
+		
+		\State \textbf{Step 1: Sentence Segmentation}
+		\State $S_{all} \leftarrow \emptyset$
+		\ForAll{$review \in D_{raw}$}
+		\State $sentences \leftarrow \text{NLTK.tokenize}(review)$
+		\ForAll{$s \in sentences$}
+		\If{$\text{Length}(s) > 2 \text{ words}$}
+		\State $S_{all}.\text{append}(s)$
+		\EndIf
+		\EndFor
+		\EndFor
+		
+		\State \textbf{Step 2: Embedding Generation}
+		\State $Model_{st} \leftarrow \text{SentenceTransformer}(S_{T})$
+		\State $V_{emb} \leftarrow Model_{st}.\text{encode}(S_{all})$ \Comment{Generate dense vectors}
+		
+		\State \textbf{Step 3: Dimensionality Reduction \& Clustering}
+		\State $V_{reduced} \leftarrow \text{PCA}(V_{emb}, \text{components}=50)$
+		\State $Clusters \leftarrow \text{KMeans}(V_{reduced}, \text{n\_clusters}=K)$
+		
+		\State \textbf{Step 4: Keyword Extraction (Labeling)}
+		\State $A_{categories} \leftarrow \emptyset$
+		\For{$k \leftarrow 0 \text{ to } K-1$}
+		\State $Docs_k \leftarrow \{s \mid s \in S_{all} \text{ where } Clusters.\text{predict}(s) = k\}$
+		\State $Keywords_k \leftarrow \text{TF-IDF}(Docs_k, \text{top\_n}=8)$
+		\State $AspectName \leftarrow \text{ManualMap}(Keywords_k)$ \Comment{e.g., 'Kargo' $\to$ 'Delivery'}
+		\State $A_{categories}.\text{add}(k \to AspectName)$
+		\EndFor
+		
+		\Return $A_{categories}$
+	\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}
+	\caption{Multi-Task Aspect-Based Sentiment Analysis Training}
+	\label{alg:multitask_training}
+	\begin{algorithmic}[1]
+		\Require $D_{train}$: Dataset with 7 aspect labels per review
+		\Require $M_{bert}$: Pre-trained \textit{bert-base-turkish-cased}
+		\Require $A$: Set of 7 Aspects (Price, Delivery, Quality, etc.)
+		\Require $C$: Classes \{0: Neg, 1: Neu, 2: Pos\}
+		
+		\State \textbf{Architecture Setup:}
+		\State $Encoder \leftarrow M_{bert}$
+		\For{$i \leftarrow 1 \text{ to } |A|$}
+		\State $Head_i \leftarrow \text{Linear}(768 \to 3)$ \Comment{One classifier per aspect}
+		\EndFor
+		\State $Optimizer \leftarrow \text{AdamW}(\text{lr}=2e^{-5})$
+		
+		\State \textbf{Training Loop:}
+		\For{$epoch \leftarrow 1 \text{ to } E$}
+		\ForAll{$(text, Y_{true}) \in D_{train}$}
+		\State $Tokens \leftarrow \text{Tokenizer}(text, \text{max\_len}=128)$
+		\State $H_{last} \leftarrow Encoder(Tokens).\text{last\_hidden\_state}$
+		\State $v_{cls} \leftarrow \text{Dropout}(H_{last}[:, 0, :])$ \Comment{Pool token}
+		
+		\State $L_{total} \leftarrow 0$
+		\For{$i \leftarrow 1 \text{ to } |A|$}
+		\State $logits_i \leftarrow Head_i(v_{cls})$ \Comment{Shape:}
+		\State $loss_i \leftarrow \text{CrossEntropy}(logits_i, Y_{true}[:, i])$
+		\State $L_{total} \leftarrow L_{total} + loss_i$
+		\EndFor
+		
+		\State $L_{total}.\text{backward}()$
+		\State $Optimizer.\text{step}()$
+		\EndFor
+		\EndFor
+		
+		\State \textbf{Inference Function:}
+		\State \textbf{Function} Predict($text$)
+		\State $v_{cls} \leftarrow \text{Encode}(text)$
+		\State $Predictions \leftarrow \{\}$
+		\For{$i \leftarrow 1 \text{ to } |A|$}
+		\State $class\_id \leftarrow \text{ArgMax}(Head_i(v_{cls}))$
+		\If{$class\_id \neq 1$} \Comment{Ignore Neutral/None}
+		\State $Predictions[A_i] \leftarrow C[class\_id]$
+		\EndIf
+		\EndFor
+		\Return $Predictions$
+		\State \textbf{End Function}
+	\end{algorithmic}
+\end{algorithm}
+
+
+The architecture is defined as follows:
+
+\begin{itemize}
+	\item \textbf{Shared Encoder Layer}: The input sequence $X = \{x_1, x_2, \dots, x_n\}$ is fed into the pre-trained BERT encoder (dbmdz/bert-base-turkish-cased). This shared layer captures the global semantic context and produces contextualized embeddings $H \in \mathbb{R}^{n \times d}$, where $d=768$.
+	
+	\item \textbf{Pooling}: The final hidden state of the special classification token \texttt{} is extracted ($h_{CLS} \in \mathbb{R}^{768}$) to serve as the aggregate representation of the entire review. A dropout layer ($p=0.1$) is applied to $h_{CLS}$ to prevent overfitting.
+	
+	\item \textbf{Multi-Head Classification Layer}: The pooled representation $h_{CLS}$ is simultaneously fed into $K=7$ independent classification heads (linear layers), where $K$ corresponds to the number of discovered aspect categories (e.g., Delivery, Price, Quality). Each head $k$ projects the shared embedding to an aspect-specific logit vector $z_k \in \mathbb{R}^3$.
+	
+	\item \textbf{Output \& Activation}: Each head is responsible for a 3-class classification task. The final prediction for aspect $k$ is obtained by applying the \textbf{argmax} operation over the logits:
+	
+	\begin{equation}
+		\hat{y}_k = \text{argmax}(W_k h_{CLS} + b_k)
+	\end{equation}
+	where $\hat{y}_k \in {Table  \ref{tab:asda_stats}}$. This allows the model to disentangle conflicting sentiments (e.g., Positive for \textit{Delivery} but Negative for \textit{Quality}) within the same sentence.
+\end{itemize}
+
+\begin{table}[h]
+	\centering
+	\caption{}
+	\label{tab:asda_stats}
+	\begin{tabular}{ll}
+		\hline
+		\textbf{Sentiment} & \textbf{Value} \\ \hline
+		Negative & 0 \\ 
+		Neutral/Absent & 1 \\ 
+		Positive & 2 \\ \hline
+	\end{tabular}
+\end{table}
+
+\begin{figure}[hbtp]
+	\centering
+	\includegraphics[width=0.48\textwidth, height=0.8\textheight, keepaspectratio]{arch3.png}
+	\caption{Proposed BERTurk-based **Multi-Task** ABSA architecture with joint aspect-sentiment detection.}
+	\label{fig:architecture}
+\end{figure}
+
+
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+This study has established a foundational framework for Aspect-Based Sentiment Analysis (ABSA) in the Turkish e-commerce domain, addressing the critical scarcity of multi-domain resources. By constructing a large-scale corpus of 54,416 reviews and distilling a \textbf{Gold Standard subset} for supervised training, we successfully pioneered a data-driven approach to aspect taxonomy. Utilizing unsupervised clustering, we identified seven latent aspect categories—ranging from \textit{Price/Performance} to \textit{Seller Communication}—without relying on rigid, pre-defined ontologies.
+
+The proposed \textbf{Multi-Task Learning (MTL)} architecture, built upon the \textit{BERTurk} encoder, has demonstrated the viability of simultaneous sentiment prediction, achieving a General Macro-F1 score of \textbf{0.7546}. This confirms that a shared encoder with independent classification heads can effectively disentangle conflicting sentiments (e.g., positive delivery vs. negative quality) within a single text, capturing granular nuances that traditional document-level models overlook.
+
+However, this research represents the initial phase of a broader investigation. While the current results are promising, challenges remain in generalizing to highly subjective categories like \textit{Design}. Future phases of this project will focus on three key areas: (1) expanding the annotated corpus to include implicit aspect expressions, (2) benchmarking the current BERT-based pipeline against generative Large Language Models (LLMs) to enhance reasoning capabilities in subjective contexts, and (3) refining the joint loss function to better mitigate the class imbalance between the dominant ``Neutral/Absent'' class and active sentiment labels. Ultimately, these continuing efforts aim to evolve the current prototype into a fully deployable, a for actionable customer insight generation in the Turkish market.
+
+
+\appendix
+\section{A}
+The complete implementation and experimental resources are provided in the project’s
+\href{https://github.com/serkaneren68/ASBA-NLP.git}{GitHub Repository} . Collected Data are stored in the \href{https://www.kaggle.com/datasets/70c23341d38e5efc0acd5e2e71e4f930cc2030cc2a93d22e20ab9f76c7ecc839}{Kaggle} .
+
+
+
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+\newpage
+
+\begin{IEEEbiography}[{\includegraphics[width=1in,height=1.25in,clip,keepaspectratio]{FurkanFaideci_Veksikalık.jpg}}]{Ahmet Furkan Faideci}
+	received his B.Sc. degree in Electrical Engineering from İstanbul Technical University, Türkiye, in 2021. He is currently pursuing an M.Sc. degree in Artificial Intelligence at Gebze Technical University. He works as a Senior Embedded Software Engineer at FEV Türkiye, where he focuses on automotive software development, model-based design, and intelligent automation for embedded systems. His professional interests include artificial intelligence, deep learning, and intelligent control systems in automotive applications.
+\end{IEEEbiography}
+
+
+
+\begin{IEEEbiography}[{\includegraphics[width=1in,height=1.25in,clip,keepaspectratio]{hozan_pic.png}}]{Hozan Baydu} 
+	received his B.Sc. degree in Electrical Engineering from Yıldız Technical University, İstanbul, Türkiye, in 2022, and is currently pursuing an M.Sc. degree in Artificial Intelligence at Gebze Technical University. He worked as a Machine Learning Engineer at ADATECH, where he focuses on model development, data processing, and optimization for intelligent systems. His research interests include natural language processing, deep learning, and applied artificial intelligence.
+\end{IEEEbiography}
+
+
+
+\begin{IEEEbiography}[{\includegraphics[width=1in,height=1.25in,clip,keepaspectratio]{serkan_vek.jpg}}]{Serkan Eren}
+	received his B.Sc. degree in Electronics Engineering from Gebze Technical University, Türkiye, in 2023, and is currently pursuing an M.Sc. degree in Artificial Intelligence at the same institution. He works as an Automotive Software Engineer at FEV Türkiye, contributing to Python-based automation, DevOps pipelines, and embedded software integration. His professional interests include deep learning, software engineering for intelligent systems, and the development of data-driven applications for automation and natural language processing.
+\end{IEEEbiography}
+
+
+\EOD
+
+\end{document}
